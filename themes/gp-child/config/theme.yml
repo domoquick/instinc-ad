@@ -1,0 +1,13 @@
+parent: classic
+name: gp-child
+display_name: Grand public (child)
+version: 1.0.0
+
+assets:
+  use_parent_assets: true
+  css:
+    all:
+      - id: gp-custom
+        path: assets/css/gp-custom.css
+        media: all
+        priority: 200

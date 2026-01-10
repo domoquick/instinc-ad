@@ -1,0 +1,13 @@
+parent: classic
+name: pro-child
+display_name: Professionnel (child)
+version: 1.0.0
+
+assets:
+  use_parent_assets: true
+  css:
+    all:
+      - id: pro-custom
+        path: assets/css/pro-custom.css
+        media: all
+        priority: 200
