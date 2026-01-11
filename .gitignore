@@ -1,0 +1,16 @@
+*.DS_Store
+app/
+admin-api/
+vendor/
+controllers/
+var/
+classes/
+cache/
+override/
+tools/
+autoload.php
+bin/
+img/
+download/
+docs/
+*.gitignore
