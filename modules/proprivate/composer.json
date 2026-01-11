@@ -1,0 +1,11 @@
+{
+  "name": "instinct/proprivate",
+  "description": "Private PRO shop access (PrestaShop 9)",
+  "type": "prestashop-module",
+  "license": "AFL-3.0",
+  "autoload": {
+    "psr-4": {
+      "ProPrivate\\": "src/"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+services:
+  ProPrivate\EventSubscriber\FrontAccessSubscriber:
+    arguments:
+      - '@prestashop.adapter.legacy.context'
+      - '@router'
+    tags:
+      - { name: kernel.event_subscriber }
