@@ -1,0 +1,36 @@
+services:
+  _defaults:
+    autowire: true
+    autoconfigure: true
+    public: false
+
+  # Infra
+  ps_progate.infra.config_reader:
+    class: Ps_ProGate\Infra\PrestaShopConfigReader
+
+  ps_progate.infra.server_bag:
+    class: Ps_ProGate\Infra\PhpServerBag
+
+  ps_progate.service.search_bot_verifier:
+    class: Ps_ProGate\Service\SearchBotVerifier
+
+  # Service principal
+  ps_progate.service.access_gate:
+    class: Ps_ProGate\Service\AccessGate
+    arguments:
+      $router: '@router'
+      $legacyContext: '@prestashop.adapter.legacy.context'
+      $config: '@ps_progate.infra.config_reader'
+      $server: '@ps_progate.infra.server_bag'
+      $botVerifier: '@ps_progate.service.search_bot_verifier'
+    public: true
+
+  # Subscriber Symfony
+  ps_progate.event_subscriber.front_access:
+    class: Ps_ProGate\EventSubscriber\FrontAccessSubscriber
+    arguments:
+      $accessGate: '@ps_progate.service.access_gate'
+      $tokenStorage: '@?security.token_storage'
+    tags:
+      - { name: kernel.event_subscriber }
+    public: true
