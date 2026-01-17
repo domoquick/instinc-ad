@@ -24,6 +24,7 @@ final class AccessGate implements AccessGateInterface
     private ConfigReaderInterface $config;
     private ServerBagInterface $server;
     private SearchBotVerifier $botVerifier;
+    private int $tache;
 
     public function __construct(
         UrlGeneratorInterface $router,
@@ -32,7 +33,7 @@ final class AccessGate implements AccessGateInterface
         ServerBagInterface $server,
         SearchBotVerifier $botVerifier
     ) {
-
+        $this->tache = 0;
         $this->router = $router;
         $this->legacyContext = $legacyContext;
         $this->config = $config;
@@ -57,12 +58,28 @@ final class AccessGate implements AccessGateInterface
 
     public function enforceLegacy(): void
     {
+        $this->tache = random_int(1,9);
+
         if (!$this->isGateActiveForCurrentShopAndHost()) {
             return;
         }
 
         $currentPath = $this->server->getRequestUri();
         $pathOnly = (string)(parse_url($currentPath, PHP_URL_PATH) ?: $currentPath);
+        $pathOnly = rtrim($pathOnly, '/');
+
+        if ($this->isAjax() || $this->isModuleActionEndpoint($pathOnly)) {
+            header('HTTP/1.1 204 No Content');
+            exit;
+        }
+
+        if ($pathOnly === '/module/ps_progate/pending') {
+            return;
+        }
+
+        if ($this->isOnPendingPage($pathOnly /* ou $path */)) {
+            return;
+        }
 
         if ($this->isAdminPathAllowed($pathOnly)) {
             return;
@@ -88,16 +105,31 @@ final class AccessGate implements AccessGateInterface
             $this->redirectToPendingLegacy();
             return;
         }
+
     }
 
     public function enforceSymfony(Request $request): ?Response
     {
+        $this->tache = random_int(1,9);
         if (!$this->isGateActiveForCurrentShopAndHost()) {
             return null;
         }
 
         $uri = $request->getRequestUri();
         $path = parse_url($uri, PHP_URL_PATH) ?? '/';
+        $path = rtrim($path, '/');
+
+        if ($this->isAjax() || $this->isModuleActionEndpoint($path)) {
+            return new Response('', Response::HTTP_NO_CONTENT);
+        }
+
+        if ($path === '/module/ps_progate/pending') {
+            return null;
+        }
+
+        if ($this->isOnPendingPage($path)) {
+            return null;
+        }
 
         if ($this->isAdminPathAllowed($path)) {
             return null;
@@ -118,6 +150,14 @@ final class AccessGate implements AccessGateInterface
         }
 
         return null;
+    }
+
+    private function isModuleActionEndpoint(string $path): bool
+    {
+        $path = rtrim($path, '/');
+
+        // cas typiques : /module/<name>/action, /module/<name>/ajax, /module/<name>/actions
+        return (bool) preg_match('#^/module/[^/]+/(action|ajax|actions)(/|$)#i', $path);
     }
 
     public function isGateActiveForCurrentShopAndHost(): bool
@@ -191,22 +231,25 @@ final class AccessGate implements AccessGateInterface
 
     private function isAllowedPath(string $path): bool
     {
+        $path = rtrim(trim((string)$path), '/');
         $shopId = $this->getShopId();
 
         $allowedPathsRaw = (string)$this->config->getString(ConfigKeys::CFG_ALLOWED_PATHS, $shopId);
-        if (trim($allowedPathsRaw) === '') {
+        
+        if (trim($allowedPathsRaw) === '' || trim($path) === '' ) {
             return false;
         }
-
+        
         $paths = preg_split('/[\n,]+/', $allowedPathsRaw) ?: [];
+
         foreach ($paths as $prefix) {
-            $prefix = trim((string)$prefix);
+            $prefix = rtrim(trim((string)$prefix), '/');
             // IMPORTANT: never allow "/" as prefix (it would open everything)
             if ($prefix === '/' || $prefix === '') {
                 continue;
             }
 
-            if (strpos($path, $prefix) === 0) {
+            if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
                 return true;
             }
         }
@@ -221,7 +264,35 @@ final class AccessGate implements AccessGateInterface
         if (strpos($path, '/img/') === 0) return true;
         if (strpos($path, '/js/') === 0) return true;
 
-        if (preg_match('#^/modules/[^/]+/views/#', $path)) return true;
+        if (preg_match('#^/modules/[^/]+/views/#', $path)) {
+            return true;
+            }
+
+        return false;
+    }
+
+    private function isAjax(): bool
+    {
+        $xrw = strtolower((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''));
+        $accept = strtolower((string)($_SERVER['HTTP_ACCEPT'] ?? ''));
+
+        return $xrw === 'xmlhttprequest' || str_contains($accept, 'application/json');
+        
+        $xrw = (string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '');
+        if (strtolower($xrw) === 'xmlhttprequest') {
+            return true;
+        }
+
+        $accept = (string)($_SERVER['HTTP_ACCEPT'] ?? '');
+        if (stripos($accept, 'application/json') !== false) {
+            return true;
+        }
+
+        // Optionnel: certains fetch envoient ce header
+        $fetch = (string)($_SERVER['HTTP_SEC_FETCH_MODE'] ?? '');
+        if (strtolower($fetch) === 'cors') {
+            return true;
+        }
 
         return false;
     }
@@ -230,60 +301,69 @@ final class AccessGate implements AccessGateInterface
     {
         $shopId = $this->getShopId();
 
+        if ($this->isAjax() || $this->isModuleActionEndpoint($backPath)) {
+            header('HTTP/1.1 204 No Content');
+            exit;
+        }
+
+        // 1) Bots => 403 si activé
         if ($this->isBot()) {
             $bots403 = (int)$this->config->getInt(ConfigKeys::CFG_BOTS_403, $shopId);
             if ($bots403) {
                 header('HTTP/1.1 403 Forbidden');
-                exit('Access Denied proGate-' . __LINE__);
+                exit('Access Denied');
             }
         }
-  
-        if ($this->isOnAuthenticationPage($backPath)) {
+
+        // 2) Anti-boucle : si on est déjà sur pending, ne rien faire
+        if ($this->isOnPendingPage($backPath)) {
             return;
         }
 
-        $context = $this->getContext();
-        $back = $this->normalizeBackForAuth($backPath);
+        // 3) Si une URL custom est définie, on redirige dessus
         $humansRedirect = (string)$this->config->getString(ConfigKeys::CFG_HUMANS_REDIRECT, $shopId);
         if (trim($humansRedirect) !== '') {
-            Tools::redirect($humansRedirect);
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('Pragma: no-cache');
+            header('Location: ' . $humansRedirect, true, 302);
+            exit;
         }
 
-        $loginUrl = $context->link->getPageLink('authentication', true, null, null);
-
-        Tools::redirect($loginUrl);
-
+        // 4) Sinon => pending
+        $this->redirectToPendingLegacy();
     }
 
     private function createUnauthenticatedResponse(Request $request): Response
     {
         $shopId = $this->getShopId();
+        $path = $request->getPathInfo();
 
+        if ($request->isXmlHttpRequest() || $this->isModuleActionEndpoint($path)) {
+            return new Response('', Response::HTTP_UNAUTHORIZED);
+        }
+
+        // 1) Bots => 403 si activé
         if ($this->isBot()) {
             $bots403 = (int)$this->config->getInt(ConfigKeys::CFG_BOTS_403, $shopId);
             if ($bots403) {
-                return new Response('Access Denied proGate-' . __LINE__ , Response::HTTP_FORBIDDEN);
+                return new Response('Access Denied', Response::HTTP_FORBIDDEN);
             }
         }
 
-        $path = rtrim($request->getPathInfo(), '/');
 
-        // 🔐 ANTI-BOUCLE
-        if ($this->isOnAuthenticationPage($path)) {
+        // 2) Anti-boucle : si déjà sur pending, ne rien faire
+        if ($this->isOnPendingPage($path)) {
             return new Response('', Response::HTTP_OK);
         }
 
+        // 3) URL custom ?
         $humansRedirect = (string)$this->config->getString(ConfigKeys::CFG_HUMANS_REDIRECT, $shopId);
         if (trim($humansRedirect) !== '') {
             return new RedirectResponse($humansRedirect);
         }
 
-        $context = $this->getContext();
-        $back = $this->normalizeBackForAuth($request->getPathInfo());
-        $loginUrl = $context->link->getPageLink('authentication', true, null, ['back' => $back]);
-
-        return new RedirectResponse($loginUrl);
-
+        // 4) Sinon => pending
+        return $this->createPendingRedirect();
     }
 
     private function normalizeBackForAuth(string $back): string
@@ -303,23 +383,22 @@ final class AccessGate implements AccessGateInterface
         return $back;
     }
 
-    private function isOnAuthenticationPage(string $path): bool
+    private function isOnPendingPage(string $path): bool
     {
         $path = rtrim($path, '/');
-
-        // URLs SEO possibles
-        return in_array($path, [
-            '/authentication',
-            '/connexion',
-            '/login',
-        ], true);
+        return str_starts_with($path, '/module/ps_progate/pending');
     }
 
     private function redirectToPendingLegacy(): void
     {
         $context = $this->getContext();
         $pendingUrl = $context->link->getModuleLink('ps_progate', 'pending');
-        Tools::redirect($pendingUrl);
+        //INFO :: ça ne foonctionne pas au 01/2026
+        // Tools::redirect($pendingUrl);
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+        header('Location: ' . $pendingUrl, true, 302);
+        exit;
     }
 
     private function createPendingRedirect(): Response
@@ -413,7 +492,7 @@ final class AccessGate implements AccessGateInterface
 
     private function isAdminPathAllowed(string $path): bool
     {
-        $path = trim($path);
+        $path = rtrim($path);
         if ($path === '') {
             return false;
         }

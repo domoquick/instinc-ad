@@ -33,12 +33,20 @@ final class Installer
             '/module/ps_progate/pending',
             '/pending',
             '/authentication',
+            '/login',
             '/cms',
             '/connexion',
             '/contact',
+            '/nous-contacter',
             '/inscription',
+            '/registration',
+            '/register',
+            '/create-account',
             '/logout',
-            '/password'
+            '/password',
+            '/mon-compte',
+            '/my-account',
+            '/recuperation-mot-de-passe'
         ]);
 
         $shops = Shop::getShops(false, null, true);

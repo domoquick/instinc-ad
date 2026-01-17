@@ -46,6 +46,7 @@ final class FrontAccessSubscriber implements EventSubscriberInterface
         $response = $this->accessGate->enforceSymfony($request);
         if ($response) {
             $event->setResponse($response);
+            $event->stopPropagation();
         }
     }
 }
