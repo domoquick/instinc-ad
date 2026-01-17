@@ -7,14 +7,13 @@ use Context;
 use Customer;
 use Tools;
 use PrestaShop\PrestaShop\Adapter\LegacyContext;
+use Ps_ProGate\Config\ConfigKeys;
+use Ps_ProGate\Infra\ConfigReaderInterface;
+use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
-use Ps_ProGate\Infra\ConfigReaderInterface;
 use Ps_ProGate\Infra\ServerBagInterface;
-
-use Ps_ProGate\Config\ConfigKeys;
 use Ps_ProGate\Service\SearchBotVerifier;
 
 final class AccessGate implements AccessGateInterface
@@ -39,21 +38,6 @@ final class AccessGate implements AccessGateInterface
         $this->config = $config;
         $this->server = $server;
         $this->botVerifier = $botVerifier;
-    }
-
-    private function getContext(): Context
-    {
-        $ctx = $this->legacyContext->getContext();
-        if ($ctx instanceof Context) {
-            return $ctx;
-        }
-        return Context::getContext();
-    }
-
-    private function getShopId(): int
-    {
-        $context = $this->getContext();
-        return (int)($context->shop->id ?? 0);
     }
 
     public function enforceLegacy(): void
@@ -152,13 +136,25 @@ final class AccessGate implements AccessGateInterface
         return null;
     }
 
-    private function isModuleActionEndpoint(string $path): bool
+    /*
+    private function isAlwaysAllowedPath(string $path): bool
     {
-        $path = rtrim($path, '/');
-
-        // cas typiques : /module/<name>/action, /module/<name>/ajax, /module/<name>/actions
-        return (bool) preg_match('#^/module/[^/]+/(action|ajax|actions)(/|$)#i', $path);
+        
     }
+*/
+    /*
+    private function isTechnicalRequestLegacy(string $path): bool
+*/
+
+/*
+    private function isTechnicalRequestSymfony(Request $request, string $path): bool
+    {
+    }
+    */
+
+    /* -------------------------------------------------------------------------
+     * Gate activation / customers
+     * ---------------------------------------------------------------------- */
 
     public function isGateActiveForCurrentShopAndHost(): bool
     {
@@ -229,73 +225,9 @@ final class AccessGate implements AccessGateInterface
         }
     }
 
-    private function isAllowedPath(string $path): bool
-    {
-        $path = rtrim(trim((string)$path), '/');
-        $shopId = $this->getShopId();
-
-        $allowedPathsRaw = (string)$this->config->getString(ConfigKeys::CFG_ALLOWED_PATHS, $shopId);
-        
-        if (trim($allowedPathsRaw) === '' || trim($path) === '' ) {
-            return false;
-        }
-        
-        $paths = preg_split('/[\n,]+/', $allowedPathsRaw) ?: [];
-
-        foreach ($paths as $prefix) {
-            $prefix = rtrim(trim((string)$prefix), '/');
-            // IMPORTANT: never allow "/" as prefix (it would open everything)
-            if ($prefix === '/' || $prefix === '') {
-                continue;
-            }
-
-            if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function isTechnicalAssetAllowed(string $path): bool
-    {
-        if (strpos($path, '/themes/') === 0) return true;
-        if (strpos($path, '/assets/') === 0) return true;
-        if (strpos($path, '/img/') === 0) return true;
-        if (strpos($path, '/js/') === 0) return true;
-
-        if (preg_match('#^/modules/[^/]+/views/#', $path)) {
-            return true;
-            }
-
-        return false;
-    }
-
-    private function isAjax(): bool
-    {
-        $xrw = strtolower((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''));
-        $accept = strtolower((string)($_SERVER['HTTP_ACCEPT'] ?? ''));
-
-        return $xrw === 'xmlhttprequest' || str_contains($accept, 'application/json');
-        
-        $xrw = (string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '');
-        if (strtolower($xrw) === 'xmlhttprequest') {
-            return true;
-        }
-
-        $accept = (string)($_SERVER['HTTP_ACCEPT'] ?? '');
-        if (stripos($accept, 'application/json') !== false) {
-            return true;
-        }
-
-        // Optionnel: certains fetch envoient ce header
-        $fetch = (string)($_SERVER['HTTP_SEC_FETCH_MODE'] ?? '');
-        if (strtolower($fetch) === 'cors') {
-            return true;
-        }
-
-        return false;
-    }
+    /* -------------------------------------------------------------------------
+     * Unauthenticated handling
+     * ---------------------------------------------------------------------- */
 
     private function handleUnauthenticatedLegacy(string $backPath): void
     {
@@ -366,21 +298,108 @@ final class AccessGate implements AccessGateInterface
         return $this->createPendingRedirect();
     }
 
-    private function normalizeBackForAuth(string $back): string
+
+    /* -------------------------------------------------------------------------
+     * Paths & request classification
+     * ---------------------------------------------------------------------- */
+/*
+    private function normalizePath(string $uriOrPath): string
     {
-        $back = $this->sanitizeBack($back);
+    }
+    */
 
-        // évite back=/connexion ou back=/authentication
-        if ($back === '/connexion' || $back === '/authentication') {
-            return '/';
+    private function isModuleActionEndpoint(string $path): bool
+    {
+        $path = rtrim($path, '/');
+
+        // cas typiques : /module/<name>/action, /module/<name>/ajax, /module/<name>/actions
+        return (bool) preg_match('#^/module/[^/]+/(action|ajax|actions)(/|$)#i', $path);
+    }
+
+
+    private function isAllowedPath(string $path): bool
+    {
+        $path = rtrim(trim((string)$path), '/');
+        $shopId = $this->getShopId();
+
+        $allowedPathsRaw = (string)$this->config->getString(ConfigKeys::CFG_ALLOWED_PATHS, $shopId);
+        
+        if (trim($allowedPathsRaw) === '' || trim($path) === '' ) {
+            return false;
+        }
+        
+        $paths = preg_split('/[\n,]+/', $allowedPathsRaw) ?: [];
+
+        foreach ($paths as $prefix) {
+            $prefix = rtrim(trim((string)$prefix), '/');
+            // IMPORTANT: never allow "/" as prefix (it would open everything)
+            if ($prefix === '/' || $prefix === '') {
+                continue;
+            }
+
+            if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
+                return true;
+            }
         }
 
-        // optionnel : couvre aussi les variantes avec slash final
-        if ($back === '/connexion/' || $back === '/authentication/') {
-            return '/';
+        return false;
+    }
+
+    private function isTechnicalAssetAllowed(string $path): bool
+    {
+        if (strpos($path, '/themes/') === 0) return true;
+        if (strpos($path, '/assets/') === 0) return true;
+        if (strpos($path, '/img/') === 0) return true;
+        if (strpos($path, '/js/') === 0) return true;
+
+        if (preg_match('#^/modules/[^/]+/views/#', $path)) {
+            return true;
+            }
+
+        return false;
+    }
+
+    /**
+     * Undocumented function
+     * isAjaxLegacy
+     * @return boolean
+     */
+/*
+    private function isAjaxLegacy(): bool
+    {
+    
+    }
+    */
+
+    /**
+     * Undocumented function
+     * isAjax
+     * @return boolean
+     */
+    private function isAjax(): bool
+    {
+        $xrw = strtolower((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''));
+        $accept = strtolower((string)($_SERVER['HTTP_ACCEPT'] ?? ''));
+
+        return $xrw === 'xmlhttprequest' || str_contains($accept, 'application/json');
+        
+        $xrw = (string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '');
+        if (strtolower($xrw) === 'xmlhttprequest') {
+            return true;
         }
 
-        return $back;
+        $accept = (string)($_SERVER['HTTP_ACCEPT'] ?? '');
+        if (stripos($accept, 'application/json') !== false) {
+            return true;
+        }
+
+        // Optionnel: certains fetch envoient ce header
+        $fetch = (string)($_SERVER['HTTP_SEC_FETCH_MODE'] ?? '');
+        if (strtolower($fetch) === 'cors') {
+            return true;
+        }
+
+        return false;
     }
 
     private function isOnPendingPage(string $path): bool
@@ -388,6 +407,43 @@ final class AccessGate implements AccessGateInterface
         $path = rtrim($path, '/');
         return str_starts_with($path, '/module/ps_progate/pending');
     }
+
+    private function isAdminPathAllowed(string $path): bool
+    {
+        $path = rtrim($path);
+        if ($path === '') {
+            return false;
+        }
+
+        // 1) Récupère le nom du dossier admin depuis les constantes disponibles
+        $adminBasename = '';
+
+        // Meilleur cas: chemin complet
+        if (\defined('_PS_ADMIN_DIR_')) {
+            $adminDir = (string) \constant('_PS_ADMIN_DIR_');
+            $adminBasename = trim(\basename(rtrim($adminDir, '/')), '/');
+        }
+
+        // Fallback fréquent: nom du dossier admin uniquement
+        if ($adminBasename === '' && \defined('_PS_ADMIN_FOLDER_')) {
+            $adminBasename = trim((string) \constant('_PS_ADMIN_FOLDER_'), '/');
+        }
+
+        // Si on ne peut pas déterminer l’admin => on ne “devine” pas
+        if ($adminBasename === '' || strtolower($adminBasename) === 'admin') {
+            return false;
+        }
+
+        // 2) Match strict du préfixe /<adminBasename>/
+        $adminPrefix = '/' . $adminBasename . '/';
+        $normalized = rtrim($path, '/') . '/';
+
+        return \strpos($normalized, $adminPrefix) === 0;
+    }
+
+    /* -------------------------------------------------------------------------
+     * Redirect helpers
+     * ---------------------------------------------------------------------- */
 
     private function redirectToPendingLegacy(): void
     {
@@ -401,45 +457,47 @@ final class AccessGate implements AccessGateInterface
         exit;
     }
 
+    /*
     private function createPendingRedirect(): Response
     {
-        $context = $this->getContext();
-        $pendingUrl = $context->link->getModuleLink('ps_progate', 'pending');
-        return new RedirectResponse($pendingUrl);
     }
 
-    private function sanitizeBack(string $back): string
+    private function getPendingUrl(): string
     {
-        $back = trim($back);
-        if ($back === '') {
-            return '/';
+    }
+
+        private function sendRedirectAndExit(string $target): void
+    {
+    }
+
+    private function sendNoContentAndExit(): void
+    {
+    }
+
+    private function sanitizeRedirectTarget(): void
+    {
+        $target = trim(str_replace(["\r", "\n"], '', $target));
+    }
+
+*/
+
+    /* -------------------------------------------------------------------------
+     * Context & bots
+     * ---------------------------------------------------------------------- */
+
+    private function getContext(): Context
+    {
+        $ctx = $this->legacyContext->getContext();
+        if ($ctx instanceof Context) {
+            return $ctx;
         }
+        return Context::getContext();
+    }
 
-        // refuse absolute URLs and protocol-relative URLs
-        if (preg_match('#^(https?:)?//#i', $back)) {
-            return '/';
-        }
-
-        // remove CRLF to prevent header injection
-        $back = str_replace(["\r", "\n"], '', $back);
-
-        // ensure it starts with /
-        if ($back[0] !== '/') {
-            $back = '/' . $back;
-        }
-
-        // keep only path, drop query + fragment (match unit test expectation)
-        $parts = parse_url($back);
-        if ($parts === false) {
-            return '/';
-        }
-
-        $path = $parts['path'] ?? '/';
-        if ($path === '') {
-            $path = '/';
-        }
-
-        return $path;
+    private function getShopId(): int
+    {
+        $context = $this->getContext();
+        return (int)($context->shop->id ?? 0);
     }
 
     private function isBot(): bool
@@ -490,37 +548,63 @@ final class AccessGate implements AccessGateInterface
         return false;
     }
 
-    private function isAdminPathAllowed(string $path): bool
+        private function normalizeBackForAuth(string $back): string
     {
-        $path = rtrim($path);
-        if ($path === '') {
-            return false;
+        $back = $this->sanitizeBack($back);
+
+        // évite back=/connexion ou back=/authentication
+        if ($back === '/connexion' || $back === '/authentication') {
+            return '/';
         }
 
-        // 1) Récupère le nom du dossier admin depuis les constantes disponibles
-        $adminBasename = '';
-
-        // Meilleur cas: chemin complet
-        if (\defined('_PS_ADMIN_DIR_')) {
-            $adminDir = (string) \constant('_PS_ADMIN_DIR_');
-            $adminBasename = trim(\basename(rtrim($adminDir, '/')), '/');
+        // optionnel : couvre aussi les variantes avec slash final
+        if ($back === '/connexion/' || $back === '/authentication/') {
+            return '/';
         }
 
-        // Fallback fréquent: nom du dossier admin uniquement
-        if ($adminBasename === '' && \defined('_PS_ADMIN_FOLDER_')) {
-            $adminBasename = trim((string) \constant('_PS_ADMIN_FOLDER_'), '/');
-        }
-
-        // Si on ne peut pas déterminer l’admin => on ne “devine” pas
-        if ($adminBasename === '' || strtolower($adminBasename) === 'admin') {
-            return false;
-        }
-
-        // 2) Match strict du préfixe /<adminBasename>/
-        $adminPrefix = '/' . $adminBasename . '/';
-        $normalized = rtrim($path, '/') . '/';
-
-        return \strpos($normalized, $adminPrefix) === 0;
+        return $back;
     }
+
+    private function createPendingRedirect(): Response
+    {
+        $context = $this->getContext();
+        $pendingUrl = $context->link->getModuleLink('ps_progate', 'pending');
+        return new RedirectResponse($pendingUrl);
+    }
+
+    private function sanitizeBack(string $back): string
+    {
+        $back = trim($back);
+        if ($back === '') {
+            return '/';
+        }
+
+        // refuse absolute URLs and protocol-relative URLs
+        if (preg_match('#^(https?:)?//#i', $back)) {
+            return '/';
+        }
+
+        // remove CRLF to prevent header injection
+        $back = str_replace(["\r", "\n"], '', $back);
+
+        // ensure it starts with /
+        if ($back[0] !== '/') {
+            $back = '/' . $back;
+        }
+
+        // keep only path, drop query + fragment (match unit test expectation)
+        $parts = parse_url($back);
+        if ($parts === false) {
+            return '/';
+        }
+
+        $path = $parts['path'] ?? '/';
+        if ($path === '') {
+            $path = '/';
+        }
+
+        return $path;
+    }
+
 
 }
