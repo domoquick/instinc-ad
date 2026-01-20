@@ -225,13 +225,11 @@ CSS;
             // 1) si tu stockes un ID CMS en config (recommandé)
             if (ctype_digit(trim($pendingRaw)) && (int)$pendingRaw > 0) {
                 $url = $this->context->link->getCMSLink((int)$pendingRaw);
-                error_log(__METHOD__ . ' _____________________ redirect ' . $url );
                 Tools::redirect($url);
                 return;
             }
 
             // 2) fallback: chemin relatif (/pending-7) ou autre
-            error_log(__METHOD__ . ' _____________________ redirect nous-contacter' );
             Tools::redirect('/nous-contacter');
             return;
         }
@@ -241,13 +239,10 @@ CSS;
 
         if (ctype_digit(trim($proRaw)) && (int)$proRaw > 0) {
             $url = $this->context->link->getCMSLink((int)$proRaw);
-            error_log(__METHOD__ . ' _____________________ redirect ' . $url );
             Tools::redirect($url);
             return;
         }
 
-        // fallback: home
-        error_log(__METHOD__ . ' _____________________ redirect /' );
         Tools::redirect('/');
         return;
     }
@@ -262,14 +257,46 @@ CSS;
         if (Tools::isSubmit('submitPsProgate')) {
             $idShop = (int) $this->context->shop->id;
 
-            Configuration::updateValue(ConfigKeys::CFG_ENABLED, (int)Tools::getValue(ConfigKeys::CFG_ENABLED), false, null, $idShop);
-            Configuration::updateValue(ConfigKeys::CFG_SHOP_IDS, (string)Tools::getValue(ConfigKeys::CFG_SHOP_IDS), false, null, $idShop);
-            Configuration::updateValue(ConfigKeys::CFG_HOSTS, (string)Tools::getValue(ConfigKeys::CFG_HOSTS), false, null, $idShop);
-            Configuration::updateValue(ConfigKeys::CFG_ALLOWED_PATHS, (string)Tools::getValue(ConfigKeys::CFG_ALLOWED_PATHS), false, null, $idShop);
-            Configuration::updateValue(ConfigKeys::CFG_ALLOWED_GROUPS, (string)Tools::getValue(ConfigKeys::CFG_ALLOWED_GROUPS), false, null, $idShop);
-            Configuration::updateValue(ConfigKeys::CFG_BOTS_403, (int)Tools::getValue(ConfigKeys::CFG_BOTS_403), false, null, $idShop);
-            Configuration::updateValue(ConfigKeys::CFG_HUMANS_REDIRECT, (string)Tools::getValue(ConfigKeys::CFG_HUMANS_REDIRECT), false, null, $idShop);
-            Configuration::updateValue(ConfigKeys::CFG_PROFESSIONALS_REDIRECT, (string)Tools::getValue(ConfigKeys::CFG_HUMANS_REDIRECT), false, null, $idShop);
+            Configuration::updateValue(
+                ConfigKeys::CFG_ENABLED,
+                (int)Tools::getValue(ConfigKeys::CFG_ENABLED),
+                false, null, $idShop
+            );
+            Configuration::updateValue(
+                ConfigKeys::CFG_SHOP_IDS,
+                (string)Tools::getValue(ConfigKeys::CFG_SHOP_IDS),
+                false, null, $idShop
+            );
+            Configuration::updateValue(
+                ConfigKeys::CFG_HOSTS,
+                (string)Tools::getValue(ConfigKeys::CFG_HOSTS),
+                false, null, $idShop
+            );
+            Configuration::updateValue(
+                ConfigKeys::CFG_ALLOWED_PATHS,
+                (string)Tools::getValue(ConfigKeys::CFG_ALLOWED_PATHS),
+                false, null, $idShop
+            );
+            Configuration::updateValue(
+                ConfigKeys::CFG_ALLOWED_GROUPS,
+                (string)Tools::getValue(ConfigKeys::CFG_ALLOWED_GROUPS),
+                false, null, $idShop
+            );
+            Configuration::updateValue(
+                ConfigKeys::CFG_BOTS_403,
+                (int)Tools::getValue(ConfigKeys::CFG_BOTS_403),
+                false, null, $idShop
+            );
+            Configuration::updateValue(
+                ConfigKeys::CFG_HUMANS_REDIRECT,
+                (string)Tools::getValue(ConfigKeys::CFG_HUMANS_REDIRECT),
+                false, null, $idShop
+            );
+            Configuration::updateValue(
+                ConfigKeys::CFG_PROFESSIONALS_REDIRECT,
+                (string)Tools::getValue(ConfigKeys::CFG_PROFESSIONALS_REDIRECT),
+                false, null, $idShop
+            );
 
             $output .= $this->displayConfirmation($this->l('Settings updated.'));
         }
@@ -368,8 +395,8 @@ CSS;
             ConfigKeys::CFG_ALLOWED_PATHS => (string) Configuration::get(ConfigKeys::CFG_ALLOWED_PATHS, null, null, $idShop),
             ConfigKeys::CFG_ALLOWED_GROUPS => (string) Configuration::get(ConfigKeys::CFG_ALLOWED_GROUPS, null, null, $idShop),
             ConfigKeys::CFG_BOTS_403 => (int) Configuration::get(ConfigKeys::CFG_BOTS_403, null, null, $idShop),
-            ConfigKeys::CFG_HUMANS_REDIRECT => (int) Configuration::get(ConfigKeys::CFG_HUMANS_REDIRECT, null, null, $idShop),
-            ConfigKeys::CFG_PROFESSIONALS_REDIRECT => (int) Configuration::get(ConfigKeys::CFG_PROFESSIONALS_REDIRECT, null, null, $idShop),
+            ConfigKeys::CFG_HUMANS_REDIRECT => (string) Configuration::get(ConfigKeys::CFG_HUMANS_REDIRECT, null, null, $idShop),
+            ConfigKeys::CFG_PROFESSIONALS_REDIRECT => (string) Configuration::get(ConfigKeys::CFG_PROFESSIONALS_REDIRECT, null, null, $idShop),
         ];
 
         return $helper->generateForm([$fieldsForm]);
