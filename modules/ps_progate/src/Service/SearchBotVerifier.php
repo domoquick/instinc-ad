@@ -5,8 +5,9 @@ namespace Ps_ProGate\Service;
 
 class SearchBotVerifier
 {
-    public function isClaimingGooglebot(string $ua): bool
+    public function isClaimingGooglebot(string $userAgent): bool
     {
+        $ua = strtolower($userAgent);
         return str_contains($ua, 'googlebot');
     }
 

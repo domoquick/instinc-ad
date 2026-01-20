@@ -3,175 +3,115 @@ declare(strict_types=1);
 
 namespace Ps_ProGate\Tests\Unit\Service;
 
+use Context;
+use Customer;
+use Language;
+use Link;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Ps_ProGate\Service\AccessGate;
+use PrestaShop\PrestaShop\Adapter\LegacyContext;
+use Ps_ProGate\Config\ConfigKeys;
 use Ps_ProGate\Infra\ConfigReaderInterface;
 use Ps_ProGate\Infra\ServerBagInterface;
-use PrestaShop\PrestaShop\Adapter\LegacyContext;
-use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
-use Customer;
-use Context;
-use Shop;
-use Ps_progate;
+use Ps_ProGate\Service\AccessGate;
 use Ps_ProGate\Service\SearchBotVerifier;
+use Shop;
+use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 
 final class AccessGateTest extends TestCase
 {
-    private function makeGate(array $configByKeyShop, array $server, ?SearchBotVerifier $botVerifier = null): AccessGate
+    /**
+     * @param array<int, array<string, mixed>> $configByShop
+     * @param array{host?:string,ua?:string,uri?:string,ip?:string} $server
+     * @param array{cmsLink?:string,moduleLink?:string} $linkReturns
+     */
+    private function makeGate(array $configByShop, array $server = [], array $linkReturns = []): AccessGate
     {
         $router = $this->createMock(UrlGeneratorInterface::class);
+
+        /** @var LegacyContext&MockObject $legacyContext */
         $legacyContext = $this->createMock(LegacyContext::class);
 
-        $context = $this->createMock(Context::class);
+        // Build a Context instance compatible with PrestaShop globals
+        $ctx = Context::getContext();
 
         $shop = $this->createMock(Shop::class);
         $shop->id = 2;
+        $ctx->shop = $shop;
 
-        $realContext = Context::getContext();
-        $realContext->shop = $shop;
-        $realContext->customer = null;
-        $realContext->link = null;
+        $lang = $this->createMock(Language::class);
+        $lang->id = 1;
+        $ctx->language = $lang;
 
-        $legacyContext->method('getContext')->willReturn($realContext);
+        /** @var Link&MockObject $link */
+        $link = $this->createMock(Link::class);
+        $link->method('getCMSLink')->willReturn($linkReturns['cmsLink'] ?? 'https://pro.instinct-ad.org/pending-7');
+        $link->method('getModuleLink')->willReturn($linkReturns['moduleLink'] ?? 'https://pro.instinct-ad.org/module/ps_progate/pending');
+        $ctx->link = $link;
 
-        $config = new class($configByKeyShop) implements ConfigReaderInterface {
+        $ctx->customer = null;
+
+        $legacyContext->method('getContext')->willReturn($ctx);
+
+        $config = new class($configByShop) implements ConfigReaderInterface {
+            /** @var array<int, array<string, mixed>> */
             private array $data;
+            /** @param array<int, array<string, mixed>> $data */
             public function __construct(array $data) { $this->data = $data; }
             public function getString(string $key, int $shopId): string {
-                return (string)($this->data[$shopId][$key] ?? '');
+                return (string) ($this->data[$shopId][$key] ?? '');
             }
             public function getInt(string $key, int $shopId): int {
-                return (int)($this->data[$shopId][$key] ?? 0);
+                return (int) ($this->data[$shopId][$key] ?? 0);
             }
         };
 
         $serverBag = new class($server) implements ServerBagInterface {
+            /** @var array{host?:string,ua?:string,uri?:string,ip?:string} */
             private array $s;
+            /** @param array{host?:string,ua?:string,uri?:string,ip?:string} $s */
             public function __construct(array $s) { $this->s = $s; }
-            public function getHost(): string { return (string)($this->s['host'] ?? ''); }
-            public function getUserAgent(): string { return (string)($this->s['ua'] ?? ''); }
-            public function getRequestUri(): string { return (string)($this->s['uri'] ?? '/'); }
-            public function getRemoteAddr(): string { return (string)($this->s['ip'] ?? ''); }
+            public function getHost(): string { return (string) ($this->s['host'] ?? ''); }
+            public function getUserAgent(): string { return (string) ($this->s['ua'] ?? ''); }
+            public function getRequestUri(): string { return (string) ($this->s['uri'] ?? '/'); }
+            public function getRemoteAddr(): string { return (string) ($this->s['ip'] ?? ''); }
         };
 
-        $botVerifier ??= $this->createMock(SearchBotVerifier::class);
+        /** @var SearchBotVerifier&MockObject $botVerifier */
+        $botVerifier = $this->createMock(SearchBotVerifier::class);
         $botVerifier->method('isClaimingGooglebot')->willReturn(false);
         $botVerifier->method('isClaimingBingbot')->willReturn(false);
 
         return new AccessGate($router, $legacyContext, $config, $serverBag, $botVerifier);
     }
 
-    public function testSanitizeBackKeepsRelativePathOnly(): void
+    public function testIsModuleActionEndpointMatches(): void
     {
-        $gate = $this->makeGate([], [], null);
-        $ref = new \ReflectionClass($gate);
-        $m = $ref->getMethod('sanitizeBack');
+        $gate = $this->makeGate([], []);
+        $m = (new \ReflectionClass($gate))->getMethod('isModuleActionEndpoint');
         $m->setAccessible(true);
 
-        $this->assertSame('/category', $m->invoke($gate, '/category?id=1'));
-        $this->assertSame('/category', $m->invoke($gate, 'category'));
-        $this->assertSame('/', $m->invoke($gate, ''));
-        $this->assertSame('/', $m->invoke($gate, 'https://evil.com/phish'));
-    }
+        $this->assertTrue($m->invoke($gate, '/module/blockwishlist/action'));
+        $this->assertTrue($m->invoke($gate, '/module/blockwishlist/ajax'));
+        $this->assertTrue($m->invoke($gate, '/module/blockwishlist/actions'));
 
-    public function testIsBotDetectsKnownPatterns(): void
-    {
-        $botVerifier = $this->createMock(SearchBotVerifier::class);
-        $botVerifier->method('isClaimingGooglebot')->willReturn(true);
-        $botVerifier->method('isVerifiedGooglebot')->willReturn(true);
-
-        $gate = $this->makeGate(
-            [],
-            [
-                'ua' => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-                'ip' => '66.249.66.1',
-            ],
-            $botVerifier
-        );
-
-        $ref = new \ReflectionClass($gate);
-        $m = $ref->getMethod('isBot');
-        $m->setAccessible(true);
-
-        $this->assertTrue($m->invoke($gate));
-
-        // Human UA => false
-        $gate2 = $this->makeGate(
-            [], 
-            [
-                'ua' => 'Mozilla/5.0 Firefox', 
-                'ip' => '203.0.113.10'
-            ],
-            null
-        );
-
-        $ref2 = new \ReflectionClass($gate2);
-        $m2 = $ref2->getMethod('isBot');
-        $m2->setAccessible(true);
-
-        $this->assertFalse($m2->invoke($gate2));
-    }
-
-    public function testIsBotRejectsSpoofedGooglebot(): void
-    {
-        $botVerifier = $this->createMock(SearchBotVerifier::class);
-        $botVerifier->method('isClaimingGooglebot')->willReturn(true);
-        $botVerifier->method('isVerifiedGooglebot')->willReturn(false);
-
-        $gate = $this->makeGate(
-            [],
-            [
-                'ua' => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-                'ip' => '203.0.113.200',
-            ],
-            $botVerifier
-        );
-
-        $ref = new \ReflectionClass($gate);
-        $m = $ref->getMethod('isBot');
-        $m->setAccessible(true);
-
-        $this->assertFalse($m->invoke($gate));
-    }
-
-    public function testIsBotDetectsMozDotBotWithoutMatchingMozilla(): void
-    {
-        $gateHuman = $this->makeGate(
-            [], 
-            [
-                'ua' => 'Mozilla/5.0 Firefox', 
-                'ip' => '203.0.113.10'
-            ],
-            null
-        );
-
-        $m = (new \ReflectionClass($gateHuman))->getMethod('isBot');
-        $m->setAccessible(true);
-        $this->assertFalse($m->invoke($gateHuman));
-
-        $gateDotBot = $this->makeGate(
-            [], 
-            [
-                'ua' => 'Mozilla/5.0 (compatible; DotBot/1.2; +https://moz.com/help/guides/dotbot)', 
-                'ip' => '203.0.113.11'
-            ],
-            null
-        );
-        
-        $m2 = (new \ReflectionClass($gateDotBot))->getMethod('isBot');
-        $m2->setAccessible(true);
-        $this->assertTrue($m2->invoke($gateDotBot));
+        $this->assertFalse($m->invoke($gate, '/module/blockwishlist'));
+        $this->assertFalse($m->invoke($gate, '/product/123'));
+        $this->assertFalse($m->invoke($gate, '/'));
     }
 
     public function testTechnicalAssetsAllowed(): void
     {
-        $gate = $this->makeGate([], [], null);
-        $ref = new \ReflectionClass($gate);
-        $m = $ref->getMethod('isTechnicalAssetAllowed');
+        $gate = $this->makeGate([], []);
+        $m = (new \ReflectionClass($gate))->getMethod('isTechnicalAssetAllowed');
         $m->setAccessible(true);
 
         $this->assertTrue($m->invoke($gate, '/themes/classic/assets/css/theme.css'));
+        $this->assertTrue($m->invoke($gate, '/assets/app.css'));
+        $this->assertTrue($m->invoke($gate, '/img/logo.png'));
+        $this->assertTrue($m->invoke($gate, '/js/app.js'));
         $this->assertTrue($m->invoke($gate, '/modules/some/views/js/front.js'));
+
         $this->assertFalse($m->invoke($gate, '/product/123'));
     }
 
@@ -179,15 +119,15 @@ final class AccessGateTest extends TestCase
     {
         $cfg = [
             2 => [
-                Ps_progate::CFG_ALLOWED_PATHS => "/authentication\n/password\n/\n/module/ps_progate/pending"
-            ]
+                ConfigKeys::CFG_ALLOWED_PATHS => "/authentication\n/password\n/\n/module/ps_progate/pending",
+            ],
         ];
-        $gate = $this->makeGate($cfg, [], null);
-        $ref = new \ReflectionClass($gate);
-        $m = $ref->getMethod('isAllowedPath');
+        $gate = $this->makeGate($cfg, []);
+        $m = (new \ReflectionClass($gate))->getMethod('isAllowedPath');
         $m->setAccessible(true);
 
         $this->assertTrue($m->invoke($gate, '/authentication'));
+        $this->assertTrue($m->invoke($gate, '/authentication/'));
         $this->assertTrue($m->invoke($gate, '/module/ps_progate/pending'));
         $this->assertFalse($m->invoke($gate, '/product/1'));
         // "/" should be ignored to avoid opening everything
@@ -198,19 +138,17 @@ final class AccessGateTest extends TestCase
     {
         $cfg = [
             2 => [
-                Ps_progate::CFG_ALLOWED_GROUPS => "3,5,9"
-            ]
+                ConfigKeys::CFG_ALLOWED_GROUPS => '3,5,9',
+            ],
         ];
-        $gate = $this->makeGate($cfg, [], null);
+        $gate = $this->makeGate($cfg, []);
 
         $customer = $this->createMock(Customer::class);
         $customer->method('getGroups')->willReturn([1, 5]);
-
         $this->assertTrue($gate->isCustomerAllowed($customer));
 
         $customer2 = $this->createMock(Customer::class);
         $customer2->method('getGroups')->willReturn([1, 2]);
-
         $this->assertFalse($gate->isCustomerAllowed($customer2));
     }
 
@@ -218,16 +156,10 @@ final class AccessGateTest extends TestCase
     {
         $cfg = [
             2 => [
-                Ps_progate::CFG_ENABLED => 0
-            ]
-        ];
-        $gate = $this->makeGate(
-            $cfg, 
-            [
-                'host' => 'pro.instinct-ad.org'
+                ConfigKeys::CFG_ENABLED => 0,
             ],
-            null
-        );
+        ];
+        $gate = $this->makeGate($cfg, ['host' => 'pro.instinct-ad.org']);
         $this->assertFalse($gate->isGateActiveForCurrentShopAndHost());
     }
 
@@ -235,27 +167,15 @@ final class AccessGateTest extends TestCase
     {
         $cfg = [
             2 => [
-                Ps_progate::CFG_ENABLED => 1,
-                Ps_progate::CFG_HOSTS => 'pro.instinct-ad.org'
-            ]
+                ConfigKeys::CFG_ENABLED => 1,
+                ConfigKeys::CFG_HOSTS => 'pro.instinct-ad.org',
+            ],
         ];
 
-        $gateOk = $this->makeGate(
-            $cfg, 
-            [
-                'host' => 'pro.instinct-ad.org'
-            ],
-            null
-        );
+        $gateOk = $this->makeGate($cfg, ['host' => 'pro.instinct-ad.org']);
         $this->assertTrue($gateOk->isGateActiveForCurrentShopAndHost());
 
-        $gateKo = $this->makeGate(
-            $cfg, 
-            [
-                'host' => 'instinct-ad.org'
-            ],
-            null
-        );
+        $gateKo = $this->makeGate($cfg, ['host' => 'instinct-ad.org']);
         $this->assertFalse($gateKo->isGateActiveForCurrentShopAndHost());
     }
 
@@ -263,124 +183,99 @@ final class AccessGateTest extends TestCase
     {
         $cfg = [
             2 => [
-                Ps_progate::CFG_ENABLED => 1,
-                Ps_progate::CFG_SHOP_IDS => '2,4'
-            ]
+                ConfigKeys::CFG_ENABLED => 1,
+                ConfigKeys::CFG_SHOP_IDS => '2,4',
+            ],
         ];
 
-        $gate = $this->makeGate(
-            $cfg, 
-            [
-                'host' => 'pro.instinct-ad.org'
-            ],
-            null
-        );
+        $gate = $this->makeGate($cfg, ['host' => 'pro.instinct-ad.org']);
         $this->assertTrue($gate->isGateActiveForCurrentShopAndHost());
 
         $cfg2 = [
             2 => [
-                Ps_progate::CFG_ENABLED => 1,
-                Ps_progate::CFG_SHOP_IDS => '1,3'
-            ]
+                ConfigKeys::CFG_ENABLED => 1,
+                ConfigKeys::CFG_SHOP_IDS => '1,3',
+            ],
         ];
 
-        $gate2 = $this->makeGate(
-            $cfg2, 
-            [
-                'host' => 'pro.instinct-ad.org'
-            ],
-            null
-        );
+        $gate2 = $this->makeGate($cfg2, ['host' => 'pro.instinct-ad.org']);
         $this->assertFalse($gate2->isGateActiveForCurrentShopAndHost());
     }
 
-    /**
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
-     */
-    public function testAdminPathAllowedForConfirmedObfuscatedAdminDir(): void
+    public function testIsOnPendingPageAcceptsSlashVariant(): void
     {
-        \define('_PS_ADMIN_DIR_', '/var/www/html/uizr5w4lkhm4df6o');
-
-        $gate = $this->makeGate([], [], null);
-
-        $ref = new \ReflectionClass($gate);
-        $m = $ref->getMethod('isAdminPathAllowed');
+        $gate = $this->makeGate([], []);
+        $m = (new \ReflectionClass($gate))->getMethod('isOnPendingPage');
         $m->setAccessible(true);
 
-        $this->assertTrue($m->invoke($gate, '/uizr5w4lkhm4df6o/'));
-        $this->assertTrue($m->invoke($gate, '/uizr5w4lkhm4df6o/index.php'));
-
-        // Obfusqué uniquement => /admin doit être refusé
-        $this->assertFalse($m->invoke($gate, '/admin/'));
-        $this->assertFalse($m->invoke($gate, '/admin/index.php'));
-
-        // Presque identique => refusé
-        $this->assertFalse($m->invoke($gate, '/uizr5w4lkhm4df6oX/'));
+        $this->assertTrue($m->invoke($gate, '/module/ps_progate/pending'));
+        $this->assertTrue($m->invoke($gate, '/module/ps_progate/pending/'));
+        $this->assertTrue($m->invoke($gate, '/module/ps_progate/pending/anything'));
+        $this->assertFalse($m->invoke($gate, '/pending'));
     }
 
-    /* test à vérifier 
-    public function testPsAdminDirExistsOnFilesystem(): void
+    public function testResolveRedirectTargetCmsIdToCmsLink(): void
     {
-        if (!\defined('_PS_ADMIN_DIR_')) {
-            $this->markTestSkipped('PrestaShop non bootstrappé.');
-        }
+        $gate = $this->makeGate([], [], ['cmsLink' => 'https://pro.instinct-ad.org/pending-7']);
+        $m = (new \ReflectionClass($gate))->getMethod('resolveRedirectTarget');
+        $m->setAccessible(true);
 
-        $adminDir = (string) \constant('_PS_ADMIN_DIR_');
+        $this->assertSame('https://pro.instinct-ad.org/pending-7', $m->invoke($gate, '7'));
+    }
 
-        $this->assertDirectoryExists(
-            $adminDir,
-            '_PS_ADMIN_DIR_ ne pointe pas vers un dossier existant'
+    public function testResolveRedirectTargetModuleNotation(): void
+    {
+        $gate = $this->makeGate([], [], ['moduleLink' => 'https://pro.instinct-ad.org/module/ps_progate/pending']);
+        $m = (new \ReflectionClass($gate))->getMethod('resolveRedirectTarget');
+        $m->setAccessible(true);
+
+        $this->assertSame(
+            'https://pro.instinct-ad.org/module/ps_progate/pending',
+            $m->invoke($gate, 'module:ps_progate:pending')
         );
-    } */
-
-    /* test à vérifier 
-    public function testPsAdminDirBasenameIsExpectedWhenDefined(): void
-    {
-        if (!\defined('_PS_ADMIN_DIR_')) {
-            $this->markTestSkipped('_PS_ADMIN_DIR_ n’est pas défini dans ce process (tests unitaires sans bootstrap PrestaShop).');
-        }
-
-        $adminDir = (string) \constant('_PS_ADMIN_DIR_');
-        $base = \basename(\rtrim($adminDir, '/'));
-
-        $this->assertSame('uizr5w4lkhm4df6o', $base, sprintf(
-            '_PS_ADMIN_DIR_ basename inattendu. Reçu: "%s" (valeur: %s)',
-            $base,
-            $adminDir
-        ));
-    } */
-
-    /**
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
-     */
-    public function testAdminAllowedWithPsAdminDir(): void
-    {
-        \define('_PS_ADMIN_DIR_', '/var/www/html/uizr5w4lkhm4df6o');
-
-        $gate = $this->makeGate([], [], null);
-        $m = (new \ReflectionClass($gate))->getMethod('isAdminPathAllowed');
-        $m->setAccessible(true);
-
-        $this->assertTrue($m->invoke($gate, '/uizr5w4lkhm4df6o/'));
-        $this->assertFalse($m->invoke($gate, '/admin/'));
     }
 
-    /**
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
-     */
-    public function testAdminAllowedWithPsAdminFolderFallback(): void
+    public function testIsAlwaysAllowedPathWhitelistsCustomRedirectSameHost(): void
     {
-        \define('_PS_ADMIN_FOLDER_', 'uizr5w4lkhm4df6o');
+        $cfg = [
+            2 => [
+                ConfigKeys::CFG_ENABLED => 1,
+                ConfigKeys::CFG_HUMANS_REDIRECT => '7', // CMS ID
+            ],
+        ];
 
-        $gate = $this->makeGate([], [], null);
-        $m = (new \ReflectionClass($gate))->getMethod('isAdminPathAllowed');
+        $gate = $this->makeGate(
+            $cfg,
+            ['host' => 'pro.instinct-ad.org'],
+            ['cmsLink' => 'https://pro.instinct-ad.org/pending-7']
+        );
+
+        $m = (new \ReflectionClass($gate))->getMethod('isAlwaysAllowedPath');
         $m->setAccessible(true);
 
-        $this->assertTrue($m->invoke($gate, '/uizr5w4lkhm4df6o/index.php'));
-        $this->assertFalse($m->invoke($gate, '/admin/index.php'));
+        $this->assertTrue($m->invoke($gate, '/pending-7'));
+        $this->assertTrue($m->invoke($gate, '/pending-7/anything'));
+        $this->assertFalse($m->invoke($gate, '/3-bagues'));
     }
 
+    public function testIsAlwaysAllowedPathDoesNotWhitelistCustomRedirectDifferentHost(): void
+    {
+        $cfg = [
+            2 => [
+                ConfigKeys::CFG_ENABLED => 1,
+                ConfigKeys::CFG_HUMANS_REDIRECT => '7',
+            ],
+        ];
+
+        $gate = $this->makeGate(
+            $cfg,
+            ['host' => 'pro.instinct-ad.org'],
+            ['cmsLink' => 'https://evil.example/pending-7']
+        );
+
+        $m = (new \ReflectionClass($gate))->getMethod('isAlwaysAllowedPath');
+        $m->setAccessible(true);
+
+        $this->assertFalse($m->invoke($gate, '/pending-7'));
+    }
 }

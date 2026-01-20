@@ -12,6 +12,10 @@ final class AccessGateWiringTest extends TestCase
 {
     public function testAccessGateServiceCanBeBuilt(): void
     {
+        if (getenv('PS_PROGATE_TESTS_INTEGRATION') !== '1') {
+            self::markTestSkipped('Integration tests disabled. Set PS_PROGATE_TESTS_INTEGRATION=1 to enable.');
+        }
+
         $container = new ContainerBuilder();
 
         // Simule les services core minimaux requis

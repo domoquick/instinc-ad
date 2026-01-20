@@ -12,6 +12,10 @@ final class ServicesWiringTest extends TestCase
 {
     public function testModuleServicesYamlCompiles(): void
     {
+        if (getenv('PS_PROGATE_TESTS_INTEGRATION') !== '1') {
+            self::markTestSkipped('Integration tests disabled. Set PS_PROGATE_TESTS_INTEGRATION=1 to enable.');
+        }
+
         $container = new ContainerBuilder();
 
         // Services externes minimaux requis par services.yml

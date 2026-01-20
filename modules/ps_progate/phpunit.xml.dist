@@ -1,12 +1,41 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<phpunit bootstrap="tests/bootstrap.php"
-         colors="true"
-         failOnRisky="true"
-         failOnWarning="true"
+<phpunit
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd"
+  bootstrap="tests/bootstrap.php"
+  colors="true"
+  failOnRisky="true"
+  failOnWarning="true"
+  cacheDirectory=".phpunit.cache"
 >
+  <php>
+    <!-- Par défaut: uniquement Unit -->
+    <env name="PS_PROGATE_TESTS_INTEGRATION" value="0"/>
+    <ini name="error_reporting" value="-1"/>
+  </php>
+
   <testsuites>
-    <testsuite name="ps_progate">
-      <directory>tests/Unit</directory>
+    <testsuite name="unit">
+      <directory suffix="Test.php">tests/Unit</directory>
+      <directory suffix="Test.php">tests/Service</directory>
+    </testsuite>
+
+    <testsuite name="integration">
+      <directory suffix="Test.php">tests/Integration</directory>
+    </testsuite>
+
+    <testsuite name="all">
+      <directory suffix="Test.php">tests</directory>
     </testsuite>
   </testsuites>
+
+  <source>
+    <include>
+      <directory suffix=".php">src</directory>
+    </include>
+    <exclude>
+      <directory suffix=".php">vendor</directory>
+      <directory suffix=".php">tests</directory>
+    </exclude>
+  </source>
 </phpunit>
