@@ -31,22 +31,19 @@ final class Installer
     {
         $defaultAllowedPaths = implode("\n", [
             '/module/ps_progate/pending',
-            '/pending',
+            '/connexion',
             '/authentication',
             '/login',
-            '/cms',
-            '/connexion',
-            '/contact',
-            '/nous-contacter',
             '/inscription',
             '/registration',
             '/register',
             '/create-account',
-            '/logout',
             '/password',
-            '/mon-compte',
-            '/my-account',
-            '/recuperation-mot-de-passe'
+            '/recuperation-mot-de-passe',
+            '/contact',
+            '/nous-contacter',
+            '/cms',
+            '/mentions-legales-2'
         ]);
 
         $shops = Shop::getShops(false, null, true);
@@ -64,6 +61,7 @@ final class Installer
 
             Configuration::updateValue(ConfigKeys::CFG_BOTS_403, 1, false, null, (int)$idShop);
             Configuration::updateValue(ConfigKeys::CFG_HUMANS_REDIRECT, '', false, null, (int)$idShop);
+            Configuration::updateValue(ConfigKeys::CFG_PROFESSIONALS_REDIRECT, '', false, null, (int)$idShop);
 
             // pending group name default
             Configuration::updateValue(ConfigKeys::CFG_PENDING_GROUP_NAME, 'PENDING', false, null, (int)$idShop);

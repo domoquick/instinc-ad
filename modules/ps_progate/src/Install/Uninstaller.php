@@ -28,6 +28,7 @@ final class Uninstaller
             ConfigKeys::CFG_ALLOWED_GROUPS,
             ConfigKeys::CFG_BOTS_403,
             ConfigKeys::CFG_HUMANS_REDIRECT,
+            ConfigKeys::CFG_PROFESSIONALS_REDIRECT,
             ConfigKeys::CFG_PENDING_GROUP_ID,
             ConfigKeys::CFG_PENDING_GROUP_NAME,
         ];

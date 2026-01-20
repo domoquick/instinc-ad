@@ -22,7 +22,13 @@ final class AccessGate implements AccessGateInterface
         private ConfigReaderInterface $config,
         private ServerBagInterface $server,
         private SearchBotVerifier $botVerifier
-    ) {}
+    ) {
+        error_log(__METHOD__ . ' _____________________ HTTPS :: ' . $_SERVER['HTTPS']);
+        error_log(__METHOD__ . ' _____________________ SERVER_PORT :: ' . $_SERVER['SERVER_PORT']);
+        
+        $customer = $this->getContext()->customer;
+        error_log(__METHOD__ . ' _____________________ isLogged :: ' . ($customer && $customer->isLogged()? 'OUI' : 'non'));
+    }
 
     /* -------------------------------------------------------------------------
      * Public API
@@ -30,15 +36,62 @@ final class AccessGate implements AccessGateInterface
 
     public function enforceLegacy(): void
     {
-        if (!$this->isGateActiveForCurrentShopAndHost()) {
+        $path = $this->normalizePath($this->server->getRequestUri());
+
+        // 0) Endpoints techniques modules : ne jamais contrôler, ne jamais rediriger
+        if ($this->isModuleActionEndpoint($path)) {
             return;
         }
 
-        $path = $this->normalizePath($this->server->getRequestUri());
+        error_log(__METHOD__ . ' _____________________ path :: ' . $path);
+        if ($path === '/connexion') {
+            error_log(__METHOD__ . ' _____________________ METHOD :: ' . ($_SERVER['REQUEST_METHOD'] ?? ''));
+            error_log(__METHOD__ . ' _____________________ POST keys :: ' . implode(',', array_keys($_POST ?? [])));
+        }
 
-        // 0) Endpoints techniques -> jamais de redirect HTML
-        if ($this->isTechnicalRequestLegacy($path)) {
-            $this->sendNoContentAndExit();
+        if ($this->isAdminPathAllowed($path) || $this->isEmployeeLogged()) {
+            error_log(__METHOD__ . ' _____________________ path ADMIN out');
+            return;
+        }
+
+        if (!$this->isGateActiveForCurrentShopAndHost()) {
+            return;
+        }
+        
+        $isLoginPage = ($path === '/connexion' || $path === '/authentication' || $path === '/login');
+        // Nettoyage back uniquement en GET (comme tu fais déjà)
+        if ($isLoginPage && !empty($_GET['back'])) {
+            error_log(__METHOD__ . ' _____________________ Back removed GET ' . $_GET['back']);
+            unset($_GET['back']);
+            $this->sendRedirectAndExit('/connexion');
+        }
+
+        if ($path === '/mon-compte' || $path === '/my-account') {
+            error_log(__METHOD__ . ' _____________________ /mon-compte ou /my-account ');
+            $customer = $this->getContext()->customer;
+            if (!$customer || !$customer->isLogged()) {
+                $this->sendRedirectAndExit('/connexion');
+            }
+            return;
+        }
+
+        if ($this->isLogoutRequest()) {
+            // IMPORTANT: laisser PrestaShop faire CustomerCore::mylogout
+            return;
+        }
+
+        if ($this->isAjaxLegacy() || $this->isModuleActionEndpoint($path)) {
+            error_log(__METHOD__ . ' _____________________ isAjaxLegacy ou  isModuleActionEndpoint ' . $path);
+            return;
+        }
+        
+        $customer = $this->getContext()->customer;
+
+
+        // IMPORTANT: laisser la home passer pour les clients connectés
+        if ($path === '/' && $customer && $customer->isLogged()) {
+            error_log(__METHOD__ . ' _____________________ laisser la home passer');
+            return;
         }
 
         // 1) Pages toujours autorisées (anti-boucle / admin / whitelist / assets)
@@ -46,40 +99,74 @@ final class AccessGate implements AccessGateInterface
             return;
         }
 
-        $customer = $this->getContext()->customer;
+        // 2)  connecté
+        if ($customer && $customer->isLogged()) {
+            // connecté mais pas autorisé => pending
+            if (!$this->isCustomerAllowed($customer)) {
+                $this->redirectToPendingLegacy();
+            }
+            return;
+        }
 
-        // 2) Non connecté
+        // Non connecté
         if (!$customer || !$customer->isLogged()) {
             $this->handleUnauthenticatedLegacy($path);
             return;
         }
 
-        // 3) Connecté mais pas autorisé
-        if (!$this->isCustomerAllowed($customer)) {
-            $this->redirectToPendingLegacy();
-            return;
-        }
     }
 
     public function enforceSymfony(Request $request): ?Response
     {
+        // URL admin (au cas où) => ne jamais contrôler
+        $path = $this->normalizePath($request->getRequestUri());
+        error_log(__METHOD__ . ' _____________________ path :: ' . $path);
+
+        if ($this->isAdminPathAllowed($path)  || $this->isEmployeeLogged()) {
+            error_log(__METHOD__ . ' _____________________ path ADMIN out');
+            return null;
+        }
+
         if (!$this->isGateActiveForCurrentShopAndHost()) {
             return null;
         }
 
-        $path = $this->normalizePath($request->getRequestUri());
+        if ($path === '/connexion' && $request->query->has('back')) {
+            error_log(__METHOD__ . ' _____________________ Block Back :: ' . $_GET['back']);
+            return new RedirectResponse('/connexion', 302);
+        }
+
+        if ($request->query->has('mylogout')) {
+            error_log(__METHOD__ . ' _____________________ Logout :: mylogout');
+            // IMPORTANT: laisser PrestaShop faire CustomerCore::mylogout
+            return null;
+        }
+        
 
         // 0) Endpoints techniques -> jamais de redirect HTML
-        if ($this->isTechnicalRequestSymfony($request, $path)) {
+        // MAIS: ne jamais couper pendant la page login (risque de casser la soumission et les scripts du thème)
+
+        $isLoginPage = in_array($path, ['/connexion','/authentication','/login'], true);
+        $isLoginCtx  = $isLoginPage || $this->isLoginContext();
+
+
+        if (!$isLoginCtx && $this->isTechnicalRequestSymfony($request, $path)) {
+            error_log(__METHOD__ . ' _____________________ isTechnicalRequestSymfony :: HTTP_NO_CONTENT');
             return new Response('', Response::HTTP_NO_CONTENT);
+        }
+
+        $customer = $this->getContext()->customer;
+
+        // IMPORTANT: laisser la home passer pour les clients connectés
+        if ($path === '/' && $customer && $customer->isLogged()) {
+            error_log(__METHOD__ . ' _____________________ laisser la home passer');
+            return null;
         }
 
         // 1) Pages toujours autorisées (anti-boucle / admin / whitelist / assets)
         if ($this->isAlwaysAllowedPath($path)) {
             return null;
         }
-
-        $customer = $this->getContext()->customer;
 
         // 2) Non connecté
         if (!$customer || !$customer->isLogged()) {
@@ -98,6 +185,33 @@ final class AccessGate implements AccessGateInterface
      * Core decisions
      * ---------------------------------------------------------------------- */
 
+    private function isLoginContext(): bool
+    {
+        $ref = (string) ($_SERVER['HTTP_REFERER'] ?? '');
+        if ($ref === '') {
+            return false;
+        }
+        $p = (string) (parse_url($ref, PHP_URL_PATH) ?: '');
+        $p = $this->normalizePath($p);
+
+        return in_array($p, ['/connexion', '/authentication', '/login'], true);
+    }
+
+    private function isLoginContextLegacy(): bool
+    {
+        // On considère "contexte login" si la requête est /connexion
+        // OU si elle provient d'une page login via Referer
+        $ref = (string) ($_SERVER['HTTP_REFERER'] ?? '');
+        if ($ref === '') {
+            return false;
+        }
+
+        $refPath = (string) (parse_url($ref, PHP_URL_PATH) ?: '');
+        $refPath = $this->normalizePath($refPath);
+
+        return in_array($refPath, ['/connexion', '/authentication', '/login'], true);
+    }
+
     private function isAlwaysAllowedPath(string $path): bool
     {
         // pending doit être "hard-allowed"
@@ -106,6 +220,18 @@ final class AccessGate implements AccessGateInterface
         }
 
         if ($this->isAdminPathAllowed($path)) {
+            return true;
+        }
+
+        // ✅ NEW: autoriser dynamiquement la page HUMANS_REDIRECT
+        $humansAllowed = $this->getHumansRedirectAllowedPath();
+        if ($humansAllowed && ($path === $humansAllowed || str_starts_with($path, $humansAllowed . '/'))) {
+            return true;
+        }
+
+        // ✅ NEW: autoriser dynamiquement la page HUMANS_REDIRECT
+        $professionnalsAllowed = $this->getProfessionnalsRedirectAllowedPath();
+        if ($professionnalsAllowed && ($path === $professionnalsAllowed || str_starts_with($path, $professionnalsAllowed . '/'))) {
             return true;
         }
 
@@ -120,10 +246,82 @@ final class AccessGate implements AccessGateInterface
         return false;
     }
 
-    private function isTechnicalRequestLegacy(string $path): bool
+    private function getProfessionnalsRedirectAllowedPath(): ?string
     {
-        // IMPORTANT: on détecte via SERVER + path (legacy)
-        return $this->isAjaxLegacy() || $this->isModuleActionEndpoint($path);
+        $shopId = $this->getShopId();
+        $raw = trim((string) $this->config->getString(ConfigKeys::CFG_HUMANS_REDIRECT, $shopId));
+
+        if ($raw === '') {
+            return null;
+        }
+
+        // 1) ID CMS
+        if (ctype_digit($raw) && (int) $raw > 0) {
+            $url = $this->getContext()->link->getCMSLink((int) $raw);
+            $path = (string) (parse_url($url, PHP_URL_PATH) ?: '');
+            $path = $this->normalizePath($path);
+            return $path !== '/' ? $path : null;
+        }
+
+        // 2) URL absolue (on n'autorise que si même host)
+        if (preg_match('#^https?://#i', $raw)) {
+            $host = (string) (parse_url($raw, PHP_URL_HOST) ?: '');
+            $host = preg_replace('#:\d+$#', '', $host) ?: $host;
+
+            // sécurité : n'autoriser que si c'est bien le même host courant
+            $currentHost = (string) $this->server->getHost();
+            if ($host !== '' && $currentHost !== '' && strcasecmp($host, $currentHost) !== 0) {
+                return null;
+            }
+
+            $path = (string) (parse_url($raw, PHP_URL_PATH) ?: '');
+            $path = $this->normalizePath($path);
+            return $path !== '/' ? $path : null;
+        }
+
+        // 3) chemin relatif /xxx ou xxx
+        $path = $this->sanitizeRedirectTarget($raw);
+        $path = $this->normalizePath($path);
+        return $path !== '/' ? $path : null;
+    }
+
+    private function getHumansRedirectAllowedPath(): ?string
+    {
+        $shopId = $this->getShopId();
+        $raw = trim((string) $this->config->getString(ConfigKeys::CFG_HUMANS_REDIRECT, $shopId));
+
+        if ($raw === '') {
+            return null;
+        }
+
+        // 1) ID CMS
+        if (ctype_digit($raw) && (int) $raw > 0) {
+            $url = $this->getContext()->link->getCMSLink((int) $raw);
+            $path = (string) (parse_url($url, PHP_URL_PATH) ?: '');
+            $path = $this->normalizePath($path);
+            return $path !== '/' ? $path : null;
+        }
+
+        // 2) URL absolue (on n'autorise que si même host)
+        if (preg_match('#^https?://#i', $raw)) {
+            $host = (string) (parse_url($raw, PHP_URL_HOST) ?: '');
+            $host = preg_replace('#:\d+$#', '', $host) ?: $host;
+
+            // sécurité : n'autoriser que si c'est bien le même host courant
+            $currentHost = (string) $this->server->getHost();
+            if ($host !== '' && $currentHost !== '' && strcasecmp($host, $currentHost) !== 0) {
+                return null;
+            }
+
+            $path = (string) (parse_url($raw, PHP_URL_PATH) ?: '');
+            $path = $this->normalizePath($path);
+            return $path !== '/' ? $path : null;
+        }
+
+        // 3) chemin relatif /xxx ou xxx
+        $path = $this->sanitizeRedirectTarget($raw);
+        $path = $this->normalizePath($path);
+        return $path !== '/' ? $path : null;
     }
 
     private function isTechnicalRequestSymfony(Request $request, string $path): bool
@@ -174,6 +372,7 @@ final class AccessGate implements AccessGateInterface
         $shopId = $this->getShopId();
 
         $allowedGroupsRaw = (string) $this->config->getString(ConfigKeys::CFG_ALLOWED_GROUPS, $shopId);
+        error_log(__METHOD__ . ' _____________________ allowedGroupsRaw :: ' . $allowedGroupsRaw);
         $allowedGroupsRaw = trim($allowedGroupsRaw);
         if ($allowedGroupsRaw === '') {
             return false;
@@ -189,11 +388,14 @@ final class AccessGate implements AccessGateInterface
         }
 
         foreach ($customer->getGroups() as $gid) {
+            error_log(__METHOD__ . ' _____________________ foreach customer groups :: ' . $gid);
             if (in_array((int) $gid, $allowedGroupIds, true)) {
+                error_log(__METHOD__ . ' _____________________ Client validé :: ' . $gid);
                 return true;
             }
         }
 
+        error_log(__METHOD__ . ' _____________________ Client rejeté');
         return false;
     }
 
@@ -223,15 +425,15 @@ final class AccessGate implements AccessGateInterface
     {
         $shopId = $this->getShopId();
 
-        // Endpoints techniques : réponse silencieuse (déjà filtré en amont, mais ceinture)
-        if ($this->isTechnicalRequestLegacy($path)) {
-            $this->sendNoContentAndExit();
+        if ($this->isAjaxLegacy() || $this->isModuleActionEndpoint($path)) {
+            return;
         }
 
         // Bots => 403 si activé
         if ($this->isBot()) {
             $bots403 = (int) $this->config->getInt(ConfigKeys::CFG_BOTS_403, $shopId);
             if ($bots403 === 1) {
+                error_log(__METHOD__ . ' _____________________ Response::HTTP/1.1 403 Forbidden');
                 header('HTTP/1.1 403 Forbidden');
                 exit('Access Denied');
             }
@@ -243,14 +445,60 @@ final class AccessGate implements AccessGateInterface
         }
 
         // URL custom ?
-        $humansRedirect = trim((string) $this->config->getString(ConfigKeys::CFG_HUMANS_REDIRECT, $shopId));
-        if ($humansRedirect !== '') {
-            $target = $this->sanitizeRedirectTarget($humansRedirect);
-            $this->sendRedirectAndExit($target);
+        $pendingCmsId = (string) $this->config->getString(ConfigKeys::CFG_HUMANS_REDIRECT, $shopId);
+        if ($pendingCmsId !== '') {
+            $humansRedirect = $this->resolveRedirectTarget($pendingCmsId);
+            $this->sendRedirectAndExit($humansRedirect);
         }
 
         // Sinon => pending module
         $this->redirectToPendingLegacy();
+    }
+
+    private function getCmsUrl(int $cmsId): string
+    {
+        $context = $this->getContext();
+
+        return $context->link->getCMSLink(
+            $cmsId,
+            null,
+            null,
+            (int) $context->language->id,
+            (int) $context->shop->id
+        );
+    }
+
+    private function resolveRedirectTarget(string $value): string
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return '/';
+        }
+
+        // 1) ID CMS numérique
+        if (ctype_digit($value)) {
+            return $this->getCmsUrl((int) $value);
+        }
+
+        // 2) Déclaration module:controller
+        // ex: module:ps_progate:pending
+        if (str_starts_with($value, 'module:')) {
+            [$type, $module, $controller] = explode(':', $value, 3);
+
+            return $this->getContext()->link->getModuleLink(
+                $module,
+                $controller
+            );
+        }
+
+        // 3) URL absolue (http/https)
+        if (preg_match('#^https?://#i', $value)) {
+            return $value;
+        }
+
+        // 4) Chemin relatif (/professionnels-8)
+        return $this->sanitizeRedirectTarget($value);
     }
 
     private function createUnauthenticatedResponse(Request $request): Response
@@ -260,6 +508,7 @@ final class AccessGate implements AccessGateInterface
 
         // endpoints techniques : pas de redirect
         if ($this->isTechnicalRequestSymfony($request, $path)) {
+            error_log(__METHOD__ . ' _____________________ Response::HTTP_UNAUTHORIZED');
             return new Response('', Response::HTTP_UNAUTHORIZED);
         }
 
@@ -267,19 +516,23 @@ final class AccessGate implements AccessGateInterface
         if ($this->isBot()) {
             $bots403 = (int) $this->config->getInt(ConfigKeys::CFG_BOTS_403, $shopId);
             if ($bots403 === 1) {
+                error_log(__METHOD__ . ' _____________________ Response::HTTP_FORBIDDEN');
                 return new Response('Access Denied', Response::HTTP_FORBIDDEN);
             }
         }
 
         // Anti-boucle pending
         if ($this->isOnPendingPage($path)) {
+            error_log(__METHOD__ . ' _____________________ Response::HTTP_OK');
             return new Response('', Response::HTTP_OK);
         }
 
         // URL custom ?
-        $humansRedirect = trim((string) $this->config->getString(ConfigKeys::CFG_HUMANS_REDIRECT, $shopId));
-        if ($humansRedirect !== '') {
-            return new RedirectResponse($this->sanitizeRedirectTarget($humansRedirect), 302);
+        $pendingCmsId = (string) $this->config->getString(ConfigKeys::CFG_HUMANS_REDIRECT, $shopId);
+        if ($pendingCmsId !== '') {
+            $humansRedirect = $this->resolveRedirectTarget($pendingCmsId);
+            error_log(__METHOD__ . ' _____________________ RedirectResponse > ' . $humansRedirect);
+            return new RedirectResponse($humansRedirect, 302);
         }
 
         // Sinon => pending
@@ -297,13 +550,24 @@ final class AccessGate implements AccessGateInterface
         return $path === '' ? '/' : $path;
     }
 
+    private function isEmployeeLogged(): bool
+    {
+        $ctx = $this->getContext();
+        return isset($ctx->employee) && $ctx->employee && (int) $ctx->employee->id > 0;
+    }
+
     private function isModuleActionEndpoint(string $path): bool
     {
         $path = rtrim($path, '/');
         if ($path === '') {
             return false;
         }
-        return (bool) preg_match('#^/module/[^/]+/(action|ajax|actions)(/|$)#i', $path);
+        if((bool) preg_match('#^/module/[^/]+/(action|ajax|actions)(/|$)#i', $path))
+        {
+            error_log(__METHOD__ . ' _____________________ Ajax (action|ajax|actions)');
+            return true;
+        }
+        return false;
     }
 
     private function isAllowedPath(string $path): bool
@@ -326,24 +590,33 @@ final class AccessGate implements AccessGateInterface
             }
 
             if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
+                error_log(__METHOD__ . ' _____________________ PASS :: ' . $path);
                 return true;
             }
         }
-
+        error_log(__METHOD__ . ' _____________________ BLOCKED :: ' . $path);
         return false;
     }
 
     private function isTechnicalAssetAllowed(string $path): bool
     {
+        error_log(__METHOD__ . ' _____________________ path :: ' . $path);
         $path = $this->normalizePath($path);
 
         foreach (['/themes/', '/assets/', '/img/', '/js/'] as $prefix) {
             if (str_starts_with($path . '/', $prefix)) {
+                error_log(__METHOD__ . ' _____________________ is ' . $prefix);
                 return true;
             }
         }
 
-        return (bool) preg_match('#^/modules/[^/]+/views/#', $path);
+        if((bool) preg_match('#^/modules/[^/]+/views/#', $path))
+        {
+            error_log(__METHOD__ . ' _____________________ is modules views');
+            return true;
+        } 
+        
+        return false;
     }
 
     /**
@@ -355,33 +628,28 @@ final class AccessGate implements AccessGateInterface
     {
         $xrw = strtolower((string) ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''));
         if ($xrw === 'xmlhttprequest') {
+            error_log(__METHOD__ . ' _____________________ Ajax xmlhttprequest');
             return true;
         }
 
         $accept = strtolower((string) ($_SERVER['HTTP_ACCEPT'] ?? ''));
         if ($accept !== '' && str_contains($accept, 'application/json')) {
+            error_log(__METHOD__ . ' _____________________ Ajax HTTP_ACCEPT');
             return true;
         }
 
         return false;
     }
-
-    /**
-     * Undocumented function
-     * isAjax
-     * @return boolean
-     */
-    /*
-        private function isAjax(): bool
-        {
-        
-        }
-    */
         
     private function isOnPendingPage(string $path): bool
     {
         $path = $this->normalizePath($path);
-        return $path === '/module/ps_progate/pending' || str_starts_with($path, '/module/ps_progate/pending/');
+        if($path === '/module/ps_progate/pending' || str_starts_with($path, '/module/ps_progate/pending/'))
+        {
+            error_log(__METHOD__ . ' _____________________ Is Pending route');
+            return true;
+        } else
+            return false; 
     }
 
     private function isAdminPathAllowed(string $path): bool
@@ -409,8 +677,32 @@ final class AccessGate implements AccessGateInterface
         $adminPrefix = '/' . $adminBasename . '/';
         $normalized = rtrim($path, '/') . '/';
 
+        error_log(__METHOD__ . " _____________________ strpos($normalized, $adminPrefix)");
         return \strpos($normalized, $adminPrefix) === 0;
     }
+
+    private function isLogoutRequest(): bool
+    {
+        // 1) Query-string brute
+        $qs = (string) ($_SERVER['QUERY_STRING'] ?? '');
+        if ($qs !== '') {
+            // match mylogout en tant que param: mylogout ou mylogout=...
+            if (preg_match('/(^|&)(mylogout)(=|&|$)/i', $qs)) {
+                error_log(__METHOD__ . ' _____________________ Logout [QUERY_STRING] :: ' . $qs);
+                return true;
+            }
+        }
+
+        // 2) Fallback: URI brute (au cas où)
+        $uri = (string) $this->server->getRequestUri();
+        if ($uri !== '' && preg_match('/[?&](mylogout)(=|&|$)/i', $uri)) {
+            error_log(__METHOD__ . ' _____________________ Logout getRequestUri() :: ' . $uri);
+            return true;
+        }
+
+        return false;
+    }
+
 
     /* -------------------------------------------------------------------------
      * Redirect helpers
@@ -424,6 +716,7 @@ final class AccessGate implements AccessGateInterface
 
     private function createPendingRedirect(): Response
     {
+        error_log(__METHOD__ . ' _____________________ RedirectResponse > ' . $this->getPendingUrl());
         return new RedirectResponse($this->getPendingUrl(), 302);
     }
 
@@ -436,7 +729,7 @@ final class AccessGate implements AccessGateInterface
     private function sendRedirectAndExit(string $target): void
     {
         $target = $this->sanitizeRedirectTarget($target);
-
+        error_log(__METHOD__ . ' _____________________ Location  --> ' . $target);
         header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
         header('Pragma: no-cache');
         header('Location: ' . $target, true, 302);
@@ -445,23 +738,28 @@ final class AccessGate implements AccessGateInterface
 
     private function sendNoContentAndExit(): void
     {
+        error_log(__METHOD__ . ' _____________________  header(HTTP/1.1 204 No Content)');
         header('HTTP/1.1 204 No Content');
         exit;
     }
 
     private function sanitizeRedirectTarget(string $target): string
     {
+        error_log(__METHOD__ . ' _____________________ target :: ' . $target);
         $target = trim(str_replace(["\r", "\n"], '', $target));
         if ($target === '') {
+            error_log(__METHOD__ . ' _____________________ return :: / ');
             return '/';
         }
 
         // Si c'est une URL absolue, on la garde telle quelle (si tu en as besoin)
         // mais on refuse les protocol-relative
         if (preg_match('#^(https?://)#i', $target)) {
+            error_log(__METHOD__ . ' _____________________ return :: ' . $target);
             return $target;
         }
         if (preg_match('#^//#', $target)) {
+            error_log(__METHOD__ . ' _____________________ return :: / ');
             return '/';
         }
 
@@ -470,6 +768,7 @@ final class AccessGate implements AccessGateInterface
             $target = '/' . $target;
         }
 
+        error_log(__METHOD__ . ' _____________________ return :: ' . $target);
         return $target;
     }
 

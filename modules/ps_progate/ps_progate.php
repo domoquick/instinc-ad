@@ -36,16 +36,6 @@ use Ps_ProGate\Config\ConfigKeys;
 class Ps_progate extends Module
 {
     // Config keys
-    public const CFG_ENABLED         = 'PS_PROGATE_ENABLED';
-    public const CFG_SHOP_IDS        = 'PS_PROGATE_SHOP_IDS';
-    public const CFG_HOSTS           = 'PS_PROGATE_HOSTS';
-    public const CFG_ALLOWED_PATHS   = 'PS_PROGATE_ALLOWED_PATHS';
-    public const CFG_ALLOWED_GROUPS  = 'PS_PROGATE_ALLOWED_GROUPS';
-    public const CFG_BOTS_403        = 'PS_PROGATE_BOTS_403';
-    public const CFG_HUMANS_REDIRECT = 'PS_PROGATE_HUMANS_REDIRECT';
-
-    public const CFG_PENDING_GROUP_ID   = 'PS_PROGATE_PENDING_GROUP_ID';
-    public const CFG_PENDING_GROUP_NAME = 'PS_PROGATE_PENDING_GROUP_NAME';
 
     public function __construct()
     {
@@ -79,7 +69,8 @@ class Ps_progate extends Module
         if (
             !$this->registerHook('actionFrontControllerInitBefore') ||
             !$this->registerHook('actionCustomerAccountAdd') ||
-            !$this->registerHook('displayHeader')
+            !$this->registerHook('displayHeader') ||
+            !$this->registerHook('actionAuthentication')
         ) {
             return false;
         }
@@ -205,6 +196,62 @@ CSS;
         return '<style>' . $css . '</style>';
     }
 
+    public function hookActionAuthentication(array $params): void
+    {
+        if (empty($params['customer']) || !($params['customer'] instanceof Customer)) {
+            return;
+        }
+
+        /** @var Customer $customer */
+        $customer = $params['customer'];
+
+        /** @var Ps_ProGate\Service\AccessGate $gate */
+        $gate = $this->getAccessGate();
+
+        if (!$gate) {
+            return;
+        }
+
+        $idShop = (int) $this->context->shop->id;
+
+        if (!$gate->isGateActiveForCurrentShopAndHost()) {
+            return;
+        }
+
+        // si client non autorisé => redirect pending
+        if (!$gate->isCustomerAllowed($customer)) {
+            $pendingRaw = (string) Configuration::get(ConfigKeys::CFG_HUMANS_REDIRECT, null, null, $idShop);
+
+            // 1) si tu stockes un ID CMS en config (recommandé)
+            if (ctype_digit(trim($pendingRaw)) && (int)$pendingRaw > 0) {
+                $url = $this->context->link->getCMSLink((int)$pendingRaw);
+                error_log(__METHOD__ . ' _____________________ redirect ' . $url );
+                Tools::redirect($url);
+                return;
+            }
+
+            // 2) fallback: chemin relatif (/pending-7) ou autre
+            error_log(__METHOD__ . ' _____________________ redirect nous-contacter' );
+            Tools::redirect('/nous-contacter');
+            return;
+        }
+
+        // client autorisé => page "professionnels"
+        $proRaw = (string) Configuration::get(ConfigKeys::CFG_PROFESSIONALS_REDIRECT, null, null, $idShop);
+
+        if (ctype_digit(trim($proRaw)) && (int)$proRaw > 0) {
+            $url = $this->context->link->getCMSLink((int)$proRaw);
+            error_log(__METHOD__ . ' _____________________ redirect ' . $url );
+            Tools::redirect($url);
+            return;
+        }
+
+        // fallback: home
+        error_log(__METHOD__ . ' _____________________ redirect /' );
+        Tools::redirect('/');
+        return;
+    }
+
     /**
      * Admin config page (simple BO form, multi-shop aware)
      */
@@ -222,6 +269,7 @@ CSS;
             Configuration::updateValue(ConfigKeys::CFG_ALLOWED_GROUPS, (string)Tools::getValue(ConfigKeys::CFG_ALLOWED_GROUPS), false, null, $idShop);
             Configuration::updateValue(ConfigKeys::CFG_BOTS_403, (int)Tools::getValue(ConfigKeys::CFG_BOTS_403), false, null, $idShop);
             Configuration::updateValue(ConfigKeys::CFG_HUMANS_REDIRECT, (string)Tools::getValue(ConfigKeys::CFG_HUMANS_REDIRECT), false, null, $idShop);
+            Configuration::updateValue(ConfigKeys::CFG_PROFESSIONALS_REDIRECT, (string)Tools::getValue(ConfigKeys::CFG_HUMANS_REDIRECT), false, null, $idShop);
 
             $output .= $this->displayConfirmation($this->l('Settings updated.'));
         }
@@ -288,7 +336,13 @@ CSS;
                         'type' => 'text',
                         'label' => $this->l('Humans redirect (optional)'),
                         'name' => ConfigKeys::CFG_HUMANS_REDIRECT,
-                        'desc' => $this->l('If set, redirect unauthenticated users here instead of authentication page.'),
+                        'desc' => $this->l('If set ID page, redirect unauthenticated users here instead of authentication page.'),
+                    ],
+                    [
+                        'type' => 'text',
+                        'label' => $this->l('Professional redirect (optional)'),
+                        'name' => ConfigKeys::CFG_PROFESSIONALS_REDIRECT,
+                        'desc' => $this->l('If set ID page, redirect authenticated users here instead of home page.'),
                     ],
                 ],
                 'submit' => [
@@ -314,7 +368,8 @@ CSS;
             ConfigKeys::CFG_ALLOWED_PATHS => (string) Configuration::get(ConfigKeys::CFG_ALLOWED_PATHS, null, null, $idShop),
             ConfigKeys::CFG_ALLOWED_GROUPS => (string) Configuration::get(ConfigKeys::CFG_ALLOWED_GROUPS, null, null, $idShop),
             ConfigKeys::CFG_BOTS_403 => (int) Configuration::get(ConfigKeys::CFG_BOTS_403, null, null, $idShop),
-            ConfigKeys::CFG_HUMANS_REDIRECT => (string) Configuration::get(ConfigKeys::CFG_HUMANS_REDIRECT, null, null, $idShop),
+            ConfigKeys::CFG_HUMANS_REDIRECT => (int) Configuration::get(ConfigKeys::CFG_HUMANS_REDIRECT, null, null, $idShop),
+            ConfigKeys::CFG_PROFESSIONALS_REDIRECT => (int) Configuration::get(ConfigKeys::CFG_PROFESSIONALS_REDIRECT, null, null, $idShop),
         ];
 
         return $helper->generateForm([$fieldsForm]);
