@@ -1,0 +1,12 @@
+{
+  "name": "domoquick/ps_progate",
+  "type": "prestashop-module",
+  "autoload": {
+    "psr-4": {
+      "Ps_ProGate\\": "src/"
+    }
+  },
+  "require": {
+    "php": ">=8.1"
+  }
+}

@@ -9,6 +9,8 @@ use PrestaShop\PrestaShop\Adapter\LegacyContext;
 use Ps_ProGate\Config\ConfigKeys;
 use Ps_ProGate\Infra\ConfigReaderInterface;
 use Ps_ProGate\Infra\ServerBagInterface;
+use Ps_ProGate\Infra\RedirectorInterface;
+use Ps_ProGate\Infra\CookieJarInterface;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -16,12 +18,16 @@ use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 
 final class AccessGate implements AccessGateInterface
 {
+    private const POST_LOGOUT_COOKIE = 'ps_progate_post_logout';
+    
     public function __construct(
+        private CookieJarInterface $cookies,
         private UrlGeneratorInterface $router,
         private LegacyContext $legacyContext,
         private ConfigReaderInterface $config,
         private ServerBagInterface $server,
-        private SearchBotVerifier $botVerifier
+        private SearchBotVerifier $botVerifier,
+        private RedirectorInterface $redirector,
     ) {
     }
 
@@ -60,7 +66,20 @@ final class AccessGate implements AccessGateInterface
         }
 
         if ($this->isLogoutRequest()) {
+            $this->markPostLogout();
             return;
+        }
+
+        if ($path === '/connexion' && $this->cookies->get('ps_progate_post_logout') === '1') {
+            $this->cookies->delete('ps_progate_post_logout');
+
+            $target = $this->getHumansRedirectUrl();
+            if ($target !== null) {
+                $this->redirector->redirectAndExit($target);
+            }
+
+            // fallback sécurité
+            $this->redirector->redirectAndExit('/');
         }
 
         if ($this->isAjaxLegacy() || $this->isModuleActionEndpoint($path)) {
@@ -89,6 +108,18 @@ final class AccessGate implements AccessGateInterface
             return;
         }
 
+    }
+
+    private function getHumansRedirectUrl(): ?string
+    {
+        $shopId = $this->getShopId();
+        $raw = trim((string) $this->config->getString(ConfigKeys::CFG_HUMANS_REDIRECT, $shopId));
+
+        if ($raw === '') {
+            return null;
+        }
+
+        return $this->resolveRedirectTarget($raw);
     }
 
     public function enforceSymfony(Request $request): ?Response
@@ -600,10 +631,7 @@ final class AccessGate implements AccessGateInterface
     private function sendRedirectAndExit(string $target): void
     {
         $target = $this->sanitizeRedirectTarget($target);
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        header('Pragma: no-cache');
-        header('Location: ' . $target, true, 302);
-        exit;
+        $this->redirector->redirectAndExit($target);
     }
 
     private function sendNoContentAndExit(): void
@@ -631,6 +659,20 @@ final class AccessGate implements AccessGateInterface
         }
 
         return $target;
+    }
+
+    private function markPostLogout(): void
+    {
+        $this->cookies->set(self::POST_LOGOUT_COOKIE, '1', 60);
+    }
+
+    private function consumePostLogout(): bool
+    {
+        if ($this->cookies->get(self::POST_LOGOUT_COOKIE) === null) {
+            return false;
+        }
+        $this->cookies->clear(self::POST_LOGOUT_COOKIE);
+        return true;
     }
 
     /* -------------------------------------------------------------------------

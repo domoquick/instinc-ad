@@ -13,27 +13,11 @@ if (file_exists($moduleAutoload)) {
     require_once $moduleAutoload;
 }
 
-// Fallback autoloader when composer install hasn't been run (common for BO-installed ZIPs)
-// This keeps the module working out-of-the-box.
-if (!class_exists('Ps_ProGate\\Config\\ConfigKeys')) {
-    spl_autoload_register(static function (string $class): void {
-        $prefix = 'Ps_ProGate\\';
-        if (strpos($class, $prefix) !== 0) {
-            return;
-        }
-
-        $relative = substr($class, strlen($prefix));
-        $file = __DIR__ . '/src/' . str_replace('\\', '/', $relative) . '.php';
-        if (is_file($file)) {
-            require_once $file;
-        }
-    });
-}
-
 use PrestaShop\PrestaShop\Adapter\SymfonyContainer;
 use Ps_ProGate\Config\ConfigKeys;
-
-class Ps_progate extends Module
+use Ps_ProGate\Infra\PhpCookieJar;
+use Ps_ProGate\Infra\LegacyRedirector;
+class Ps_ProGate extends Module
 {
     // Config keys
 
@@ -506,14 +490,23 @@ CSS;
                 }
             };
 
+
+            $cookies = new PhpCookieJar();
+
+            $redirector = new LegacyRedirector();
+
             $botVerifier = new \Ps_ProGate\Service\SearchBotVerifier();
+
             return new \Ps_ProGate\Service\AccessGate(
-                $router,
-                $legacyContext,
-                $config,
-                $server,
-                $botVerifier
+                cookies: $cookies,     // DOIT être un CookieJarInterface
+                router: $router,           // UrlGeneratorInterface
+                legacyContext: $legacyContext,
+                config: $config,
+                server: $server,
+                botVerifier: $botVerifier,
+                redirector: $redirector,
             );
+
         } catch (\Throwable $e) {
             return null;
         }

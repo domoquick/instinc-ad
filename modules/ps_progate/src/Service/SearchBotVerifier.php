@@ -7,8 +7,11 @@ class SearchBotVerifier
 {
     public function isClaimingGooglebot(string $userAgent): bool
     {
-        $ua = strtolower($userAgent);
-        return str_contains($ua, 'googlebot');
+        $ua = trim($userAgent);
+        if ($ua === '') {
+            return false;
+        }
+        return (bool) preg_match('~\bGooglebot\b~i', $ua);
     }
 
     public function isClaimingBingbot(string $ua): bool

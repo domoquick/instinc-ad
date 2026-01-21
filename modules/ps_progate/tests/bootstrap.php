@@ -24,3 +24,11 @@ if (file_exists($mainModuleFile)) {
 
     require_once $mainModuleFile;
 }
+
+if (!function_exists('ps_progate_ps_bootstrapped')) {
+    function ps_progate_ps_bootstrapped(): bool
+    {
+        return defined('_PS_VERSION_')
+            && defined('_DB_PREFIX_');
+    }
+}

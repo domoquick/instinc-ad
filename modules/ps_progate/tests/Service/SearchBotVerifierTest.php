@@ -75,8 +75,9 @@ namespace Ps_ProGate\Tests\Service {
         protected function setUp(): void
         {
             parent::setUp();
-            $this->verifier = new SearchBotVerifier();
-            DnsStubRegistry::reset();
+            if (!ps_progate_ps_bootstrapped()) {
+                $this->markTestSkipped('PrestaShop not bootstrapped.');
+            }
         }
 
         public function testIsClaimingGooglebot(): void

@@ -17,6 +17,8 @@ use Ps_ProGate\Service\AccessGate;
 use Ps_ProGate\Service\SearchBotVerifier;
 use Shop;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
+use Ps_ProGate\Infra\RedirectorInterface;
+use Ps_ProGate\Infra\CookieJarInterface;
 
 final class AccessGateTest extends TestCase
 {
@@ -82,7 +84,21 @@ final class AccessGateTest extends TestCase
         $botVerifier->method('isClaimingGooglebot')->willReturn(false);
         $botVerifier->method('isClaimingBingbot')->willReturn(false);
 
-        return new AccessGate($router, $legacyContext, $config, $serverBag, $botVerifier);
+        /** @var RedirectorInterface&MockObject $redirector */
+        $redirector = $this->createMock(RedirectorInterface::class);
+
+        /** @var CookieJarInterface&MockObject $cookies */
+        $cookies = $this->createMock(CookieJarInterface::class);
+
+        return new AccessGate(
+            cookies: $cookies,     // DOIT être un CookieJarInterface
+            router: $router,           // UrlGeneratorInterface
+            legacyContext: $legacyContext,
+            config: $config,
+            server: $serverBag,
+            botVerifier: $botVerifier,
+            redirector: $redirector,
+        );
     }
 
     public function testIsModuleActionEndpointMatches(): void
